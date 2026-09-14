@@ -8,6 +8,14 @@
   before release (org decision 2026-09-14: MLX/MPS out of scope for
   openmirlab). This package is Torch/CUDA/CPU only; `device="mps"` now raises
   `ValueError`. See `brain/decisions.md` for the full record.
+- The now-single-implementation `backends/` package (its `SeparationBackend`
+  seam, `TorchBackend`, and `ChunkingPlan`) is gone too -- it existed only to
+  make Torch and MLX interchangeable. `run_folder()` owns the chunked Torch
+  inference directly again (via `utils.demix_track`), matching its pre-seam
+  shape plus the manifest/`output_format` features added since; `backend=` is
+  removed entirely from `BSRoformerSession`/`BSRoformerSeparator`/
+  `separate_folder()`/the CLI. Twin-synced with melband-roformer-infer's
+  identical removal (`932afad`).
 
 ### pcunwa model coverage
 

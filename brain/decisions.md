@@ -152,6 +152,18 @@ alongside D8-D13 are independent of the backend axis and remain in place.
 This is a forward removal on top of the current tree, not a `git revert`
 of the MPS/MLX commits.
 
+**Follow-up (same day):** left `backends/` behind as a stub package
+(`base.py` with only `ChunkingPlan`, `torch_backend.py` with `TorchBackend`)
+when D14 landed, which diverged from melband-roformer-infer's twin removal
+(`932afad`) -- melband deleted the whole package and inlined the Torch path
+directly into `run_folder()`/`utils.demix_track`, since a single-implementation
+seam is a leftover dispatch abstraction per the same D13 "share the pattern,
+not a library" reasoning. Brought into line: `backends/` is deleted;
+`run_folder()` (CLI and `BSRoformerSession.infer()` alike) now owns the
+chunked Torch inference directly again, matching the pre-seam shape (see
+`870c64c`) plus the manifest/`output_format` features added since;
+`ChunkingPlan`'s numbers are computed inline in `utils.demix_track` again.
+
 ## Open
 
 | # | Question | Owner | Blocks |

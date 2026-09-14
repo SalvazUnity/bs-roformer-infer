@@ -67,26 +67,26 @@ Bundle").
   `DEFAULT_CKPT_BASE_URL`/`DEFAULT_CONFIG_BASE_URL` construction (legacy
   fallback path only; the old TRvlvr repo is dead -- see "Weights hosting"
   below).
-- `src/bs_roformer/backends/` -- the Torch compute path, kept in its own
-  module rather than inlined into `inference.py`/`clean_api.py`. `base.py`
-  holds `ChunkingPlan` (the one owner of chunk/step/fade/border numbers, read
-  by `utils.demix_track`); `torch_backend.py`'s `TorchBackend` wraps the
-  shipped `demix_track` path without forking it. This package used to also
-  dispatch between Torch and an MLX backend by name (`__init__.py`'s
-  `resolve_backend_name`/`get_backend`, a `SeparationBackend` protocol in
-  `base.py`); that dispatch and the MLX backend were removed org-wide
-  (2026-09-14, see brain/decisions.md) -- Torch is now the only backend.
 - `src/bs_roformer/inference.py` -- the `bs-roformer-infer` CLI: folder-batch
   separation, chunked overlap-add, weights auto-resolve via `download.py`.
-  `separate_folder_with()` owns everything backend-agnostic (folder iteration,
-  stem naming, instrumental derivation, the manifest) so no backend can drift on
-  any of it; `run_folder()` keeps its signature and is the Torch entry into it.
+  `run_folder()` owns folder iteration, stem naming, instrumental derivation,
+  the manifest, and the chunked Torch inference itself (via `utils.demix_track`)
+  in one place. This used to sit behind a `backends/` package (a
+  `SeparationBackend` seam + `TorchBackend` + `ChunkingPlan`) that dispatched
+  between Torch and an MLX backend by name; both the MLX backend and that
+  now-single-implementation seam were removed org-wide (2026-09-14, see
+  brain/decisions.md) -- `run_folder()` is torch-only again, matching its
+  pre-seam shape (see git history around `870c64c`) plus the manifest/
+  `output_format` features added since.
 - `src/bs_roformer/clean_api.py` -- `BSRoformerSession`, the public Python
   facade README leans on: explicit session lifecycle, lazy loading, and a thin
-  inference call that delegates to `inference.run_folder()` and surfaces the
-  exact output files it wrote rather than inventing metadata from the registry.
-- `src/bs_roformer/utils.py` -- `demix_track`, `get_model_from_config`
-  (converts YAML `!!python/tuple` lists back to real tuples post-safe-load).
+  inference call that delegates to `inference.run_folder()` (its own resident
+  model, directly -- no backend indirection) and surfaces the exact output
+  files it wrote rather than inventing metadata from the registry.
+- `src/bs_roformer/utils.py` -- `demix_track` (chunk/step/fade/border numbers
+  computed inline; not shared via a `ChunkingPlan`, since there is only one
+  caller), `get_model_from_config` (converts YAML `!!python/tuple` lists back
+  to real tuples post-safe-load).
 - `src/bs_roformer/config/checkpoints.toml` -- the live registry source and
   patch point for dead URLs, with recorded sha256 + size per downloadable
   asset. Edit this file first before touching `download.py`.
