@@ -149,9 +149,9 @@ def run_folder(
 ) -> OutputManifest:
     """Torch entry point: separate every WAV in a folder. Signature unchanged.
 
-    Delegates the Torch-specific work to TorchBackend and the backend-agnostic
-    work -- folder iteration, stem naming, instrumental derivation, the manifest --
-    to separate_folder_with(), so any backend drives the identical output logic.
+    Delegates the Torch-specific work to TorchBackend and everything else --
+    folder iteration, stem naming, instrumental derivation, the manifest -- to
+    separate_folder_with(), so the two concerns cannot drift against each other.
     """
     from .backends.torch_backend import TorchBackend
 
@@ -252,8 +252,6 @@ def proc_folder(args) -> OutputManifest:
     parser.add_argument("--store_dir", type=Path, default=Path("outputs"), help="path to store model outputs")
     parser.add_argument("--device", type=str, default=None,
                         help=f"torch device: {DEVICE_CHOICES} (default: auto)")
-    parser.add_argument("--backend", type=str, default=None,
-                        help="compute backend: 'torch' (default), 'mlx', or 'auto'")
     parser.add_argument("--device_ids", nargs='+', type=int, help='optional list of gpu ids for DataParallel')
     parser.add_argument("--output_format", type=str, default=DEFAULT_OUTPUT_FORMAT,
                         choices=sorted(_OUTPUT_FORMAT_WRITERS),
@@ -267,19 +265,7 @@ def proc_folder(args) -> OutputManifest:
     else:
         args = parser.parse_args(args)
 
-    from .backends import DEFAULT_BACKEND, resolve_backend_name
-
-    # Availability first, so an unavailable backend fails before a checkpoint is
-    # downloaded and verified rather than after.
-    resolve_backend_name(getattr(args, "backend", None))
-
     _resolve_model_assets(args, parser)
-
-    # Resolve for real now that the checkpoint's variation is known: `auto` must
-    # be able to skip a backend that has no head for this model.
-    backend_name = resolve_backend_name(
-        getattr(args, "backend", None), variation=getattr(args, "model_variation", None)
-    )
 
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
@@ -287,40 +273,26 @@ def proc_folder(args) -> OutputManifest:
     with open(args.config_path) as f:
         config = ConfigDict(yaml.load(f, Loader=SafeLoaderWithTuple))
 
-    from .backends import get_backend
+    from .backends.torch_backend import TorchBackend
 
     print(f"Using model weights: {args.model_path}")
 
-    if backend_name == DEFAULT_BACKEND:
-        model = get_model_from_config(
-            args.model_type,
-            config,
-            model_variation=getattr(args, "model_variation", None),
-        )
-        model.load_state_dict(
-            load_checkpoint_state(args.model_path, map_location=torch.device("cpu"))
-        )
-        device = _select_device(args)
-        if args.device_ids:
-            if not torch.cuda.is_available():
-                raise RuntimeError("CUDA is required for --device_ids usage")
-            model = nn.DataParallel(model, device_ids=args.device_ids).to(device)
-        else:
-            model = model.to(device)
-        backend = get_backend(backend_name)(model, config, device)
+    model = get_model_from_config(
+        args.model_type,
+        config,
+        model_variation=getattr(args, "model_variation", None),
+    )
+    model.load_state_dict(
+        load_checkpoint_state(args.model_path, map_location=torch.device("cpu"))
+    )
+    device = _select_device(args)
+    if args.device_ids:
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is required for --device_ids usage")
+        model = nn.DataParallel(model, device_ids=args.device_ids).to(device)
     else:
-        # A non-Torch backend builds its own model from the checkpoint. Handing it
-        # a constructed torch module -- which this path used to do unconditionally
-        # -- produced a backend holding the wrong framework's model entirely.
-        if args.device_ids:
-            raise ValueError(f"--device_ids is CUDA-only and cannot be used with "
-                             f"backend {backend_name!r}")
-        backend = get_backend(backend_name).from_checkpoint(
-            config=config,
-            checkpoint_path=args.model_path,
-            variation=getattr(args, "model_variation", None),
-            device=getattr(args, "device", None),
-        )
+        model = model.to(device)
+    backend = TorchBackend(model, config, device)
 
     return separate_folder_with(
         backend.separate, args, config, verbose=False,

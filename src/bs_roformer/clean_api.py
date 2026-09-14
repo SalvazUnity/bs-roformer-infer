@@ -31,7 +31,6 @@ class BSRoformerSession:
         config=None,
         models_dir=None,
         device=None,
-        backend=None,
         progress=True,
         checkpoint_url=None,
         checkpoint_sha256=None,
@@ -42,7 +41,6 @@ class BSRoformerSession:
         self.config_path = Path(config_path) if config_path else None
         self.models_dir = models_dir
         self.device = device
-        self.backend = backend
         self._backend = None
         self.progress = progress
         self.checkpoint_url = checkpoint_url
@@ -67,16 +65,6 @@ class BSRoformerSession:
             raise RuntimeError("cannot load a closed BSRoformerSession")
         self._status = "loading"
         try:
-            from .backends import get_backend, resolve_backend_name
-
-            # Resolve the backend before any expensive work: an unavailable one
-            # must fail here, not after a 700MB checkpoint has been verified. The
-            # registry variation is read first so `auto` can skip a backend that
-            # has no head for this checkpoint instead of failing at construction.
-            self.backend = resolve_backend_name(
-                self.backend, variation=self._metadata().get("variation")
-            )
-
             from .download import ensure_model_assets
             from .inference import SafeLoaderWithTuple
 
@@ -88,17 +76,7 @@ class BSRoformerSession:
             with self.config_path.open() as handle:
                 self._config = ConfigDict(yaml.load(handle, Loader=SafeLoaderWithTuple))
 
-            if self.backend == "torch":
-                self._load_torch()
-            else:
-                self._verify_checkpoint_hash()
-                self._backend = get_backend(self.backend).from_checkpoint(
-                    config=self._config,
-                    checkpoint_path=self.model_path,
-                    variation=self._metadata().get("variation"),
-                )
-                self._model = self._backend.model
-                self.device = self._backend.resolved_device
+            self._load_torch()
             self._status = "ready"
             return self
         except Exception:
@@ -124,7 +102,7 @@ class BSRoformerSession:
         """The shipped Torch construction path, preserved step for step."""
         from argparse import Namespace
 
-        from .backends import get_backend
+        from .backends.torch_backend import TorchBackend
         from .inference import _select_device
         from .utils import get_model_from_config, load_checkpoint_state
 
@@ -138,7 +116,7 @@ class BSRoformerSession:
         target = _select_device(Namespace(device=self.device))
         self._model = self._model.to(target).eval()
         self.device = target
-        self._backend = get_backend("torch")(self._model, self._config, target)
+        self._backend = TorchBackend(self._model, self._config, target)
 
     def infer(self, input_folder, *, store_dir="outputs", verbose=False, output_format="wav_float32"):
         if self._status != "ready" or self._model is None:
@@ -158,10 +136,9 @@ class BSRoformerSession:
     def _ensure_backend(self):
         """The backend, built on demand for sessions handed a model directly."""
         if self._backend is None:
-            from .backends import get_backend, resolve_backend_name
+            from .backends.torch_backend import TorchBackend
 
-            self.backend = resolve_backend_name(self.backend)
-            self._backend = get_backend(self.backend)(self._model, self._config, self.device)
+            self._backend = TorchBackend(self._model, self._config, self.device)
         return self._backend
 
     def release(self):
@@ -205,7 +182,6 @@ class BSRoformerSession:
         return {
             "model": self.model_name,
             "status": self._status,
-            "backend": self.backend,
             "device": str(self.device) if self.device is not None else None,
             "model_loaded": self._model is not None,
             "models_dir": str(self.models_dir) if self.models_dir else None,
@@ -253,7 +229,6 @@ def separate_folder(input_folder, **kwargs):
         "config_path",
         "models_dir",
         "device",
-        "backend",
         "progress",
         "checkpoint_url",
         "checkpoint_sha256",
