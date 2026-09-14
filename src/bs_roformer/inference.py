@@ -9,9 +9,10 @@ Training configs sometimes embed `!!python/tuple` YAML tags; SafeLoaderWithTuple
 downgrades those to plain lists so `yaml.load` never has to execute an arbitrary
 Python-object constructor, and utils.get_model_from_config converts the needed
 params back to tuples afterward. `_select_device` resolves `None`/`auto` to
-cuda-else-cpu (legacy behaviour: MPS is opt-in, never auto-promoted) and raises on
-an explicitly requested accelerator that is unavailable rather than silently
-downgrading it. `run_folder()` returns an immutable manifest of the files it actually
+cuda-else-cpu and raises on an explicitly requested accelerator that is
+unavailable rather than silently downgrading it -- `device="mps"` always raises
+(MLX/MPS support was removed org-wide, 2026-09-14). `run_folder()` returns an
+immutable manifest of the files it actually
 writes, derived from the loaded config and successful writes rather than guessed
 registry metadata. `output_format` controls the written subtype/suffix
 (`_OUTPUT_FORMAT_WRITERS` is the single source of truth) -- defaults to
@@ -321,13 +322,7 @@ def _resolve_model_assets(args: argparse.Namespace, parser: argparse.ArgumentPar
     args.model_variation = checkpoint_metadata(model_key).get("variation")
 
 
-DEVICE_CHOICES = "None, 'auto', 'cpu', 'cuda', 'cuda:N', or 'mps'"
-
-
-def mps_available() -> bool:
-    """True when this torch build exposes a usable Apple Silicon MPS backend."""
-    backend = getattr(torch.backends, "mps", None)
-    return bool(backend is not None and backend.is_available())
+DEVICE_CHOICES = "None, 'auto', 'cpu', 'cuda', or 'cuda:N'"
 
 
 def _select_device(args: argparse.Namespace) -> torch.device:
@@ -335,16 +330,14 @@ def _select_device(args: argparse.Namespace) -> torch.device:
     if isinstance(requested, torch.device):
         return requested
     if requested is None or requested == "auto":
-        # Legacy auto-selection, deliberately unchanged: MPS is opt-in, never
-        # promoted silently, so a Mac caller's outputs do not move under them.
         return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     if requested == "cpu":
         return torch.device("cpu")
     if requested == "mps":
-        if not mps_available():
-            raise RuntimeError("MPS was explicitly requested but is unavailable "
-                               "(needs an Apple Silicon Mac and an arm64 torch build)")
-        return torch.device("mps")
+        raise ValueError(
+            "device='mps' is not supported: MLX/MPS support was removed "
+            f"(org decision 2026-09-14); device must be {DEVICE_CHOICES}"
+        )
     if not isinstance(requested, str) or not requested.startswith("cuda"):
         raise ValueError(f"device must be {DEVICE_CHOICES}")
     suffix = requested[4:]

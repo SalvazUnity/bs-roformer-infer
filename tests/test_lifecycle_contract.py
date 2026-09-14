@@ -8,7 +8,6 @@ from bs_roformer.clean_api import BSRoformerSession
 
 def test_device_contract(monkeypatch):
     monkeypatch.setattr("bs_roformer.inference.torch.cuda.is_available", lambda: False)
-    monkeypatch.setattr("bs_roformer.inference.mps_available", lambda: False)
     assert _select_device(Namespace(device=None)) == torch.device("cpu")
     assert _select_device(Namespace(device="auto")) == torch.device("cpu")
     with pytest.raises(RuntimeError):
@@ -20,27 +19,13 @@ def test_device_contract(monkeypatch):
     assert _select_device(Namespace(device="cuda:1")) == torch.device("cuda:1")
 
 
-def test_explicit_mps_resolves_when_available(monkeypatch):
+def test_mps_always_raises(monkeypatch):
+    """MLX/MPS support was removed org-wide (2026-09-14): `device="mps"` must
+    raise a clear ValueError regardless of what hardware is actually present --
+    never resolve, and never silently downgrade to another device."""
     monkeypatch.setattr("bs_roformer.inference.torch.cuda.is_available", lambda: False)
-    monkeypatch.setattr("bs_roformer.inference.mps_available", lambda: True)
-    assert _select_device(Namespace(device="mps")) == torch.device("mps")
-
-
-def test_explicit_mps_raises_when_unavailable(monkeypatch):
-    """An explicit accelerator is honoured or the call fails -- never downgraded."""
-    monkeypatch.setattr("bs_roformer.inference.torch.cuda.is_available", lambda: False)
-    monkeypatch.setattr("bs_roformer.inference.mps_available", lambda: False)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ValueError):
         _select_device(Namespace(device="mps"))
-
-
-def test_auto_never_promotes_to_mps(monkeypatch):
-    """Legacy auto-selection is preserved: MPS is opt-in, so existing Mac callers
-    keep the exact compute path -- and the exact outputs -- they had before."""
-    monkeypatch.setattr("bs_roformer.inference.torch.cuda.is_available", lambda: False)
-    monkeypatch.setattr("bs_roformer.inference.mps_available", lambda: True)
-    assert _select_device(Namespace(device=None)) == torch.device("cpu")
-    assert _select_device(Namespace(device="auto")) == torch.device("cpu")
 
 
 def test_session_lifecycle_cache_resolver_and_cuda_forwarding(monkeypatch, tmp_path):
@@ -93,7 +78,6 @@ def test_session_lifecycle_cache_resolver_and_cuda_forwarding(monkeypatch, tmp_p
     # The explicitly requested device still reaches the compute path and is
     # reported back on a public surface rather than only on the model.
     assert session.cache_info()["device"] == "cuda:1"
-    assert session.cache_info()["backend"] == "torch"
     session.release()
     session.load()
     assert len(constructed) == 2

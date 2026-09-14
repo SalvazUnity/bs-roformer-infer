@@ -55,15 +55,11 @@ class TorchBackend:
         return result
 
     def release(self) -> None:
-        from ..inference import mps_available
-
         if self._model is not None and hasattr(self._model, "cpu"):
             self._model.cpu()
         self._model = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        if mps_available():
-            torch.mps.empty_cache()
 
     def _print_estimate(self, total_length: int) -> None:
         step = self._config.inference.chunk_size // self._config.inference.num_overlap

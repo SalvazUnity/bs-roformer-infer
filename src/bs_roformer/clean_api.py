@@ -154,12 +154,8 @@ class BSRoformerSession:
         try:
             import torch
 
-            from .inference import mps_available
-
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            if mps_available():
-                torch.mps.empty_cache()
         except ImportError:
             pass
         if self._status != "closed":
