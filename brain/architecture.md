@@ -1,4 +1,10 @@
-# Architecture — the `backend` × `device` contract
+# Architecture — superseded `backend` × `device` design
+
+> **Historical, not current.** This design was implemented experimentally and
+> then removed before release on 2026-09-14. Apple MLX backends, the public
+> `backend=` axis, and Torch MPS devices are now out of scope; explicit
+> `device="mps"` raises. D14 in [`decisions.md`](decisions.md) records the
+> reversal and the root `README.md` / `CLAUDE.md` own current behavior.
 
 ## The two axes
 
