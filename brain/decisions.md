@@ -129,6 +129,29 @@ and the layout remaps are genuinely identical everywhere — but it is a small
 box of stateless helpers, and it must never grow into the shared runtime
 article 4a forbids. Revisit at N=3 or N=4, with this evidence in hand.
 
+### D14 · MLX/MPS support removed before release (reverses D8-D12)
+
+Org decision 2026-09-14: MLX/MPS is out of scope for openmirlab. Removed
+`src/bs_roformer/mlx/` (the vendored MLX BS-RoFormer model and heads),
+`backends/mlx_backend.py`, the `backend=` parameter entirely (values were
+`torch`/`mlx`/`auto`; this package is unreleased, so there is no
+compatibility-shim obligation), and the `[mlx]` optional extra. The
+`backends/` dispatch layer (`resolve_backend_name`, `get_backend`, the
+`SeparationBackend` protocol, `BackendUnavailable`) is gone with it -- it
+existed only to make Torch and MLX interchangeable, and there is now only
+one backend.
+
+`device="mps"` reverses D8 and raises again (`ValueError`, not the
+pre-D8 `RuntimeError`), with a message naming the removal. D9-D12 (MPS
+lands first, ship all 24 MLX heads, `auto` prefers MLX, share the pattern
+not a library) are now moot -- there is nothing left to prefer or share.
+
+Non-MLX/MPS work from the same 2026-07-31 round was kept, not reverted:
+checkpoint downloader/hash fixes and config-default fixes that landed
+alongside D8-D13 are independent of the backend axis and remain in place.
+This is a forward removal on top of the current tree, not a `git revert`
+of the MPS/MLX commits.
+
 ## Open
 
 | # | Question | Owner | Blocks |
@@ -137,3 +160,6 @@ article 4a forbids. Revisit at N=3 or N=4, with this evidence in hand.
 
 O2 does not block implementation or evidence-gathering; it blocks landing MLX on
 mainline. Recording it here so it is a scheduled decision rather than a surprise.
+
+**Moot as of D14 (2026-09-14):** MLX was removed rather than merged, so there is
+nothing left to amend the non-goal for.

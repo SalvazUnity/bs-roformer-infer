@@ -9,11 +9,11 @@ architecture as a pip-installable, PyTorch-based CLI + Python API with
 automatic checkpoint management: no training code, no UVR GUI dependency.
 
 Devices preserve legacy `None` auto-selection and also accept explicit `auto`,
-`cpu`, `cuda`, `cuda:N`, and `mps`; an explicitly requested accelerator that is
-unavailable must raise, never downgrade silently. `auto` deliberately still means
-CUDA-else-CPU -- it does not promote a Mac caller onto MPS, because that would
-move their outputs without their asking. MPS needs an arm64 interpreter; under
-Rosetta it reports as unavailable rather than failing loudly. Sessions may
+`cpu`, `cuda`, and `cuda:N`; an explicitly requested accelerator that is
+unavailable must raise, never downgrade silently. `auto` means CUDA-else-CPU.
+`device="mps"` raises a clear `ValueError` -- MLX/Apple Silicon (MPS) support
+was removed org-wide (2026-09-14, see brain/decisions.md); this package has no
+non-CUDA accelerator path. Sessions may
 release and reload models, but closed sessions are terminal. `cache_info()` and
 loading share the download resolver, which reads package-owned checkpoints TOML.
 Given an input folder of WAV files, it produces separated stems (vocals,
@@ -54,11 +54,6 @@ Bundle").
   used by pcunwa's `bs_large_v2_inst.ckpt`. The RoFormer trunk remains in
   `bs_roformer.py`; this module owns the four extra time/frequency Transformer
   pairs inserted before the mask MLP.
-- `src/bs_roformer/mlx/variants.py` -- MLX Siamese and Value Residual trunk
-  implementations, kept separate so their checkpoint parameter trees remain
-  strict-loadable.
-- `src/bs_roformer/mlx/heads/hyperace_v1.py` -- MLX HyperACE v1 head; v1 and v2
-  remain separate because their decoder state trees differ.
 - `backbone_variant = "value_residual"` enables the experimental learned
   value-residual trunk; standard models keep their original state layout.
 - `src/bs_roformer/model_registry.py` -- `BSModel` + `MODEL_REGISTRY`,
@@ -72,57 +67,15 @@ Bundle").
   `DEFAULT_CKPT_BASE_URL`/`DEFAULT_CONFIG_BASE_URL` construction (legacy
   fallback path only; the old TRvlvr repo is dead -- see "Weights hosting"
   below).
-- `src/bs_roformer/backends/` -- the compute seam. `base.py` holds the
-  `SeparationBackend` protocol (one mixture in, named stems out) and
-  `BackendUnavailable`; `torch_backend.py` wraps the shipped `demix_track` path
-  without forking it; `__init__.py` resolves a backend by name. The seam sits at a
-  whole mixture rather than a chunk on purpose: chunked overlap-add accumulates
-  on-device, and a per-chunk seam would drag every accumulator back to the host.
-  Backend modules import lazily, so `import bs_roformer` never pulls in an
-  optional framework -- `tests/test_backends.py` asserts that.
-- `src/bs_roformer/mlx/` -- the MLX BS-RoFormer, imported only by
-  `backends/mlx_backend.py`. Originally vendored verbatim from
-  `ssmall256/mlx-audio-separator` (MIT; source revision recorded in `model.py`'s
-  header for attribution); the project now owns and has reshaped this code, so it
-  is no longer resynced against upstream. Split by knowledge, not by the single
-  vendored file it used to be:
-  - `model.py` -- the trunk only: `BSRoformerMLX.__init__`/`__call__` and their
-    private forward helpers (STFT -> band-split -> transformer stack -> mask
-    estimation -> masked iSTFT). Upstream's `separate()`,
-    `separate_audio_chunked()`, and module-level `create_compiled_model()` were
-    deleted here -- verified zero inbound callers anywhere in the package; the
-    production path is `__call__` alone, called by `backends/mlx_backend.py`.
-  - `attention.py` -- `L2Norm`, `Attention`, `LinearAttention` (currently
-    unreachable -- `Transformer`'s `linear_attn` flag is always `False` at every
-    call site, kept as upstream-shaped surface rather than pruned), `FeedForward`,
-    `TransformerLayer`, `Transformer`, `ExactGELU`.
-  - `bands.py` -- `BandSplit`, `MaskEstimator`, `MLP`, `BSRoformerBlock`,
-    `DEFAULT_FREQS_PER_BANDS`.
-  - `ops.py` -- the einops-lite `pack`/`unpack`/`rearrange` tensor primitives
-    plus small helpers (`exists`, `default`, `env_enabled`,
-    `batched_group_linear`).
-  - `rfft_guard.py` -- `exact_zero_safe_rfft()`, MLX 0.31.2's Metal rfft-kernel
-    workaround. Not model architecture -- read its docstring before touching it;
-    removing it reintroduces a 1.455e-02 divergence on any audio containing
-    silence. `model.py`'s `__call__` and `heads/fno.py`'s `_SpectralConv1D` both
-    depend on it.
-  - `heads/` -- mask-estimator heads, one owner for variant selection
-    (`heads/__init__.py`'s `VARIANTS` registry, mirroring Torch's
-    `_create_mask_estimator`; heads import lazily so a checkpoint that never
-    asks for one doesn't pay to import it). `fno.py` -- `FNOMaskEstimator`,
-    the FNO port (kernel-size-1 convs done as `mx.einsum` rather than
-    `mlx.nn.Conv1d`, to avoid an NCL<->NLC transpose fight with the FFT).
-    `hyperace.py` -- `HyperACEMaskEstimator`, the conv/hypergraph
-    segmentation port (Backbone -> HyperACE fusion -> Decoder ->
-    ProgressiveUpsampleHead over NHWC, matching MLX's native conv layout so
-    no permute is needed at the trunk boundary). `large_inst.py` --
-    `LargeInstMaskEstimator`, four alternating time/frequency Transformer
-    pairs built from trunk blocks (`attention.py`, `bands.py::MLP`,
-    `ops.py`), with its own two `RotaryEmbedding` instances tuned for this
-    head rather than reusing the trunk's.
-  `convert.py`'s `load_converted_weights()` raises rather than loading partially:
-  upstream's `load_weights(strict=False)` silently drops unmatched keys, which
-  leaves layers at random initialisation and produces confident garbage.
+- `src/bs_roformer/backends/` -- the Torch compute path, kept in its own
+  module rather than inlined into `inference.py`/`clean_api.py`. `base.py`
+  holds `ChunkingPlan` (the one owner of chunk/step/fade/border numbers, read
+  by `utils.demix_track`); `torch_backend.py`'s `TorchBackend` wraps the
+  shipped `demix_track` path without forking it. This package used to also
+  dispatch between Torch and an MLX backend by name (`__init__.py`'s
+  `resolve_backend_name`/`get_backend`, a `SeparationBackend` protocol in
+  `base.py`); that dispatch and the MLX backend were removed org-wide
+  (2026-09-14, see brain/decisions.md) -- Torch is now the only backend.
 - `src/bs_roformer/inference.py` -- the `bs-roformer-infer` CLI: folder-batch
   separation, chunked overlap-add, weights auto-resolve via `download.py`.
   `separate_folder_with()` owns everything backend-agnostic (folder iteration,
@@ -185,7 +138,6 @@ by outage rather than announcement:
 6. The pcunwa inventory covers 16 BS checkpoints: Leap standard/Xe, Siamese,
    HyperACE v1/v2, FNO, Large-Inst, Resurrection, Revive, and Value Residual.
    The three new architecture-specific checkpoints strict-loaded on 2026-07-31.
-   The optional MLX backend now covers the same six declared variation names;
    Siamese and Value Residual use trunk implementations rather than mask heads.
 
 `config/checkpoints.toml` is the single patch point for a future re-host; it
@@ -210,21 +162,10 @@ Development below). Test files:
 - `tests/test_weights_ux.py` -- sha256 verification wiring (a wrong hash
   must delete the file, not ship it) and models-dir resolution precedence,
   offline (temp files + monkeypatched `requests`).
-- `tests/test_device_parity.py` -- real-checkpoint CPU-vs-MPS output comparison,
-  the article-2 accuracy gate for the MPS path. Marked `realweights` and
-  **deselected by default**; it never downloads and skips cleanly when the
-  checkpoint is absent or the host has no MPS. Run explicitly on an Apple Silicon
-  Mac: `pytest -m realweights tests/test_device_parity.py -v` (~2 min; recorded
-  worst-stem divergence 1.136e-07 on M2 / torch 2.13.0).
-- `tests/test_mlx_parity.py` -- Torch-vs-MLX parity on the real checkpoint across
-  three tails: signal, zero-padded, and near-silent. The silent cases are the
-  point: clean signal agreed to 4.0e-07 while a zero-padded tail diverged by
-  1.455e-02, and every track's final chunk is padded. Marked `realweights`,
-  deselected by default, needs the `[mlx]` extra. Run on an Apple Silicon Mac:
-  `pytest -m realweights tests/test_mlx_parity.py -v` (~95 s).
-- `tests/test_backends.py` -- backend resolution, refusal semantics (unsupported
-  variation, unaligned chunking), and the assertion that `import bs_roformer`
-  pulls in no optional framework. Offline, hardware-independent.
+- `tests/test_lifecycle_contract.py` -- device contract (including
+  `test_mps_always_raises`: `device="mps"` must raise `ValueError`
+  regardless of hardware -- MLX/MPS support was removed org-wide,
+  2026-09-14) and session lifecycle/cache-resolver behaviour.
 - `tests/test_weights_liveness.py` -- HEADs every registry URL for real.
   Marked `network` and **deselected by default**
   (`addopts = "-m 'not network'"` in pyproject.toml); CI never needs network
@@ -239,13 +180,6 @@ Development below). Test files:
 CI (`.github/workflows/test.yml`) matrixes Python 3.10-3.13, all
 `not network`-marked; run `uv run pytest -q` to get current pass/deselect
 counts rather than trusting numbers recorded here.
-
-**arm64 note**: `test_device_parity.py` and `test_mlx_parity.py` skip
-silently under an x86_64 interpreter (including Python running under
-Rosetta on Apple Silicon) -- a green suite on the wrong arch exercises
-neither MPS nor MLX and proves nothing about those paths. Confirm `python -c
-"import platform; print(platform.machine())"` says `arm64` before trusting a
-realweights run.
 
 ## File-top header convention
 
