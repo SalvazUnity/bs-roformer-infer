@@ -41,15 +41,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Optional MLX backend (Apple Silicon). Kept out of the core install so a plain
-# `pip install bs-roformer-infer` stays framework-light and importable everywhere;
-# `import bs_roformer` never imports mlx. Floors only, no ceilings: mlx-audio-io
-# was deliberately NOT taken as a dependency because it pins mlx to an exact
-# version and ships a compiled backend, and the model path never imports it.
-mlx = [
-    "mlx>=0.31",
-    "mlx-spectro>=0.7",
-]
 dev = [
     "pytest>=7.0",
     "ruff>=0.5",

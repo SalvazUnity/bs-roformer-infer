@@ -1,4 +1,4 @@
-"""PyTorch backend -- the shipped path, unchanged, behind the seam.
+"""PyTorch backend -- the shipped path, unchanged.
 
 Holds an already-constructed model plus its resolved device and turns a mixture
 into stems by calling the same utils.demix_track() the package has always used;
@@ -8,7 +8,7 @@ from the advanced composition API that callers still import directly.
 The per-track ETA carried between tracks lives here because it is a property of
 Torch's chunk timing, not of folder iteration.
 
-Reads: ..utils (demix_track), .base (SeparationBackend), torch, numpy
+Reads: ..utils (demix_track), torch, numpy
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from ..utils import demix_track
 
 
 class TorchBackend:
-    """Wraps a loaded BSRoformer and its device as a SeparationBackend."""
+    """Wraps a loaded BSRoformer and its device, turning a mixture into stems."""
 
     name = "torch"
 
