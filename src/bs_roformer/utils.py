@@ -81,15 +81,17 @@ def get_windowing_array(window_size, fade_size, device):
     return window.to(device)
 
 def demix_track(config, model, mix, device, first_chunk_time=None):
-    # ChunkingPlan owns these numbers so a second backend cannot derive them
-    # independently and drift silently -- see backends/base.py.
-    from .backends.base import ChunkingPlan
-
-    plan = ChunkingPlan.from_config(config)
-    C = plan.chunk_size
-    step = plan.step
-    fade_size = plan.fade_size
-    border = plan.border
+    # chunk_size moved between config sections across upstream config versions.
+    if hasattr(config.inference, "chunk_size"):
+        C = config.inference.chunk_size
+    elif hasattr(config, "audio") and hasattr(config.audio, "chunk_size"):
+        C = config.audio.chunk_size
+    else:
+        C = 588800  # default chunk size
+    N = config.inference.num_overlap
+    step = C // N
+    fade_size = C // 10
+    border = C - step
 
     if mix.shape[1] > 2 * border and border > 0:
         mix = nn.functional.pad(mix, (border, border), mode='reflect')

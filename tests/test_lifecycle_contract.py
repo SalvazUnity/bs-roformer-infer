@@ -62,8 +62,8 @@ def test_session_lifecycle_cache_resolver_and_cuda_forwarding(monkeypatch, tmp_p
     monkeypatch.setattr("bs_roformer.inference.torch.cuda.is_available", lambda: True)
     monkeypatch.setattr("bs_roformer.inference.torch.cuda.device_count", lambda: 2)
     monkeypatch.setattr(
-        "bs_roformer.inference.separate_folder_with",
-        lambda separate, _a, _c, **_k: seen.setdefault("run", separate),
+        "bs_roformer.inference.run_folder",
+        lambda model, _a, _c, _d, **_k: seen.setdefault("run", model),
     )
     session = BSRoformerSession(model_name="unknown", device="cuda:1")
     with pytest.raises(RuntimeError):
@@ -74,7 +74,7 @@ def test_session_lifecycle_cache_resolver_and_cuda_forwarding(monkeypatch, tmp_p
     assert len(resolver_calls) == 2 and len(constructed) == 1
     assert seen["to"] == torch.device("cuda:1")
     session.infer(tmp_path)
-    assert callable(seen["run"])
+    assert seen["run"] is session._model
     # The explicitly requested device still reaches the compute path and is
     # reported back on a public surface rather than only on the model.
     assert session.cache_info()["device"] == "cuda:1"

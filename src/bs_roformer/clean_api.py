@@ -6,8 +6,9 @@ surfaces the exact output files run_folder() wrote, instead of inventing metadat
 from the registry, so callers can treat it like a receipt for the work just done.
 
 Reads: .checkpoints (checkpoint_metadata), .download (ensure_model_assets,
-get_file_hash), .inference (OutputManifest, SafeLoaderWithTuple, run_folder),
-.utils (get_model_from_config), yaml, ml_collections, torch
+get_file_hash), .inference (OutputManifest, SafeLoaderWithTuple,
+_select_device, run_folder), .utils (get_model_from_config,
+load_checkpoint_state), yaml, ml_collections, torch
 """
 
 from __future__ import annotations
@@ -41,7 +42,6 @@ class BSRoformerSession:
         self.config_path = Path(config_path) if config_path else None
         self.models_dir = models_dir
         self.device = device
-        self._backend = None
         self.progress = progress
         self.checkpoint_url = checkpoint_url
         self.checkpoint_sha256 = checkpoint_sha256
@@ -102,7 +102,6 @@ class BSRoformerSession:
         """The shipped Torch construction path, preserved step for step."""
         from argparse import Namespace
 
-        from .backends.torch_backend import TorchBackend
         from .inference import _select_device
         from .utils import get_model_from_config, load_checkpoint_state
 
@@ -116,39 +115,25 @@ class BSRoformerSession:
         target = _select_device(Namespace(device=self.device))
         self._model = self._model.to(target).eval()
         self.device = target
-        self._backend = TorchBackend(self._model, self._config, target)
 
     def infer(self, input_folder, *, store_dir="outputs", verbose=False, output_format="wav_float32"):
         if self._status != "ready" or self._model is None:
             raise RuntimeError("BSRoformerSession must be ready; call load() before infer()")
         from argparse import Namespace
 
-        from .inference import separate_folder_with
+        from .inference import run_folder
 
-        return separate_folder_with(
-            self._ensure_backend().separate,
+        return run_folder(
+            self._model,
             Namespace(input_folder=Path(input_folder), store_dir=Path(store_dir)),
             self._config,
+            self.device,
             verbose=verbose,
             output_format=output_format,
         )
 
-    def _ensure_backend(self):
-        """The backend, built on demand for sessions handed a model directly."""
-        if self._backend is None:
-            from .backends.torch_backend import TorchBackend
-
-            self._backend = TorchBackend(self._model, self._config, self.device)
-        return self._backend
-
     def release(self):
-        # Defer entirely to the backend when there is one: it already moves the
-        # model off-device and clears the right cache. Doing it here as well
-        # called .cpu() twice on the same model.
-        if self._backend is not None:
-            self._backend.release()
-            self._backend = None
-        elif self._model is not None and hasattr(self._model, "cpu"):
+        if self._model is not None and hasattr(self._model, "cpu"):
             self._model.cpu()
         self._model = None
         try:

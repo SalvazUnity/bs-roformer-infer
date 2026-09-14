@@ -11,7 +11,9 @@ Python-object constructor, and utils.get_model_from_config converts the needed
 params back to tuples afterward. `_select_device` resolves `None`/`auto` to
 cuda-else-cpu and raises on an explicitly requested accelerator that is
 unavailable rather than silently downgrading it -- `device="mps"` always raises
-(MLX/MPS support was removed org-wide, 2026-09-14). `run_folder()` returns an
+(MLX/MPS support was removed org-wide, 2026-09-14). `run_folder()` owns folder
+iteration, stem naming, instrumental derivation, the manifest, and the chunked
+Torch inference itself (via utils.demix_track) in one place, and returns an
 immutable manifest of the files it actually
 writes, derived from the loaded config and successful writes rather than guessed
 registry metadata. `output_format` controls the written subtype/suffix
@@ -19,14 +21,15 @@ registry metadata. `output_format` controls the written subtype/suffix
 `"wav_float32"` everywhere in this package so existing callers keep today's
 behavior unless they opt in.
 
-Reads: .backends.torch_backend (TorchBackend), .utils (get_model_from_config,
-load_checkpoint_state), .download (ensure_model_assets), .checkpoints
-(checkpoint_metadata), .model_registry (DEFAULT_MODEL), yaml, ml_collections, torch
+Reads: .utils (demix_track, get_model_from_config, load_checkpoint_state),
+.download (ensure_model_assets), .checkpoints (checkpoint_metadata),
+.model_registry (DEFAULT_MODEL), yaml, ml_collections, torch
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,7 +46,7 @@ from tqdm import tqdm
 from .checkpoints import checkpoint_metadata
 from .download import ensure_model_assets
 from .model_registry import DEFAULT_MODEL
-from .utils import get_model_from_config, load_checkpoint_state
+from .utils import demix_track, get_model_from_config, load_checkpoint_state
 
 
 class SafeLoaderWithTuple(yaml.SafeLoader):
@@ -148,33 +151,18 @@ def _append_output(
 def run_folder(
     model, args, config, device, verbose: bool = False, output_format: str = DEFAULT_OUTPUT_FORMAT
 ) -> OutputManifest:
-    """Torch entry point: separate every WAV in a folder. Signature unchanged.
+    """Separate every WAV in a folder with the shipped Torch model. Signature unchanged.
 
-    Delegates the Torch-specific work to TorchBackend and everything else --
-    folder iteration, stem naming, instrumental derivation, the manifest -- to
-    separate_folder_with(), so the two concerns cannot drift against each other.
-    """
-    from .backends.torch_backend import TorchBackend
-
-    backend = TorchBackend(model, config, device)
-    return separate_folder_with(
-        backend.separate, args, config, verbose=verbose, output_format=output_format
-    )
-
-
-def separate_folder_with(
-    separate, args, config, verbose: bool = False, output_format: str = DEFAULT_OUTPUT_FORMAT
-) -> OutputManifest:
-    """Backend-agnostic folder run: read, delegate one mixture, write, manifest.
-
-    `separate` receives a `(channels, samples)` float32 array and returns a mapping
-    of stem id to an array of the same shape. Everything a stem's filename, the
-    derived instrumental, and the returned manifest depend on is decided here, once,
-    so no backend can drift on any of it. `output_format` controls the written
+    Owns folder iteration, stem naming, instrumental derivation, the manifest, and
+    the chunked Torch inference itself (via utils.demix_track) in one place --
+    everything a stem's filename, the derived instrumental, and the returned
+    manifest depend on is decided here, once. `output_format` controls the written
     suffix/subtype via `_OUTPUT_FORMAT_WRITERS`.
     """
     start_time = time.time()
     suffix, subtype = _resolve_output_writer(output_format)
+
+    model.eval()
 
     input_folder = Path(args.input_folder).expanduser()
     store_dir = _resolve_output_dir(Path(args.store_dir).expanduser())
@@ -187,6 +175,7 @@ def separate_folder_with(
     iterable = _format_iterable(all_mixtures_path, verbose)
 
     outputs: list[OutputFile] = []
+    first_chunk_time = None
 
     for track_number, path in enumerate(iterable, 1):
         print(f"\nProcessing track {track_number}/{total_tracks}: {path.name}")
@@ -198,7 +187,18 @@ def separate_folder_with(
             original_mono = True
             mix = np.stack([mix, mix], axis=-1)
 
-        res = separate(mix.T)
+        mixture = torch.tensor(mix.T, dtype=torch.float32)
+
+        if first_chunk_time is not None:
+            total_length = mixture.shape[1]
+            step = config.inference.chunk_size // config.inference.num_overlap
+            num_chunks = (total_length + step - 1) // step
+            estimated_total_time = first_chunk_time * num_chunks
+            print(f"Estimated total processing time for this track: {estimated_total_time:.2f} seconds")
+            sys.stdout.write(f"Estimated time remaining: {estimated_total_time:.2f} seconds\r")
+            sys.stdout.flush()
+
+        res, first_chunk_time = demix_track(config, model, mixture, device, first_chunk_time)
 
         for output_id in output_ids:
             output_audio = res[output_id].T
@@ -274,8 +274,6 @@ def proc_folder(args) -> OutputManifest:
     with open(args.config_path) as f:
         config = ConfigDict(yaml.load(f, Loader=SafeLoaderWithTuple))
 
-    from .backends.torch_backend import TorchBackend
-
     print(f"Using model weights: {args.model_path}")
 
     model = get_model_from_config(
@@ -293,10 +291,9 @@ def proc_folder(args) -> OutputManifest:
         model = nn.DataParallel(model, device_ids=args.device_ids).to(device)
     else:
         model = model.to(device)
-    backend = TorchBackend(model, config, device)
 
-    return separate_folder_with(
-        backend.separate, args, config, verbose=False,
+    return run_folder(
+        model, args, config, device, verbose=False,
         output_format=getattr(args, "output_format", DEFAULT_OUTPUT_FORMAT),
     )
 
