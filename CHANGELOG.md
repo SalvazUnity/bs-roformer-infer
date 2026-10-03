@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- Restored declared Python 3.10 support for the checkpoint registry by
+  depending on `tomli` below Python 3.11 and using it when `tomllib` is absent.
+- The PR test workflow now keys the uv cache from committed `pyproject.toml`;
+  its former default expected an absent `uv.lock` and stopped before tests.
+
 ### Removed
 
 - Experimental MLX (Apple Silicon) backend and MPS device support were removed
