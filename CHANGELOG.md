@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Pinned the default SW checkpoint's complete six-stem outputs from pristine
+  historical BS-RoFormer for FP32 and CUDA autocast, plus a separate baseline
+  of all seven public WAV outputs across the default chunk boundary. Real
+  model tests require the official cached weights and recorded GPU profile;
+  hosted CI checks fixture metadata without bundling weights.
+
 ### Fixed
 
 - Restored declared Python 3.10 support for the checkpoint registry by
