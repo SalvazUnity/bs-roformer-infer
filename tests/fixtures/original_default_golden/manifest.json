@@ -22,5 +22,28 @@
     6,
     2,
     88064
-  ]
+  ],
+  "public_baseline": {
+    "kind": "existing port session, not upstream inference wrapper",
+    "input_shape": [
+      590940,
+      2
+    ],
+    "output_ids": [
+      "bass",
+      "drums",
+      "guitar",
+      "instrumental",
+      "other",
+      "piano",
+      "vocals"
+    ],
+    "output_shape": [
+      590940,
+      2
+    ],
+    "sample_rate": 44100,
+    "torch": "2.9.1+cu128",
+    "cuda_device": "NVIDIA GeForce RTX 4090"
+  }
 }
